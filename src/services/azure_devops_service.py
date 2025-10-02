@@ -1,10 +1,10 @@
 import requests
-import os
 import base64
 from datetime import datetime
 from typing import List, Dict, Any
 import time
 from src.config import areasPathCOE, areasPathEDW
+import json
 
 class AzureDevOpsService:
     def __init__(self, url: str, pat: str):
@@ -52,7 +52,10 @@ class AzureDevOpsService:
         url = f"{self.url}/_apis/wit/wiql?api-version=7.0"
         response = requests.post(url, json={"query": query}, headers=self.headers)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        print(f"Response to the Query:\n{json.dumps(data['workItems'], indent=4)}")
+        print("=====================================================")
+        return data
 
     def run_wiql_query(self, team_projects: List[str], work_item_types: List[str],
                       start_date: datetime, end_date: datetime) -> Dict:
@@ -106,7 +109,6 @@ class AzureDevOpsService:
                 )
                 
                 print(f"Executing query for {project}:", query)
-                print("||||||||||||||||||||||||||||||||||||||||||")
                 try:
                     result = self._execute_single_query(query)
                     if result and 'workItems' in result:
