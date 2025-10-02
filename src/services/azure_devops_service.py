@@ -1,10 +1,17 @@
 import requests
 import os
 import base64
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
 import time
 from src.config import areasPathCOE, areasPathEDW
+import os
+
+TIMEZONE_APP = int(os.getenv("TIMEZONE_APP", "0"))
+TIMEZONE_ADO = int(os.getenv("TIMEZONE_ADO", "0"))
+
+tz_app = timezone(timedelta(hours=TIMEZONE_APP))
+tz_ado = timezone(timedelta(hours=TIMEZONE_ADO))
 
 class AzureDevOpsService:
     def __init__(self, url: str, pat: str):
@@ -18,6 +25,14 @@ class AzureDevOpsService:
         self.cache = {}
         self.cache_duration = 3600
 
+    def convert_app_to_ado(self, dt: datetime) -> datetime:
+        dt_app = dt.replace(tzinfo=tz_app)
+        return dt_app.astimezone(tz_ado)
+
+    def convert_ado_to_app(self, dt: datetime) -> datetime:
+        dt_ado = dt.replace(tzinfo=tz_ado)
+        return dt_ado.astimezone(tz_app)
+    
     def get_team_projects(self) -> List[str]:
         """Get list of team projects"""
         try:
@@ -59,8 +74,11 @@ class AzureDevOpsService:
         """Execute WIQL queries for each project with its specific conditions"""
         try:
             # Format dates in the correct format for WIQL (YYYY-MM-DD)
-            start_str = start_date.strftime("'%Y-%m-%d'")
-            end_str = end_date.strftime("'%Y-%m-%d'")
+            start_date_utc = start_date.astimezone(timezone.utc)
+            end_date_utc = end_date.astimezone(timezone.utc)
+
+            start_str = start_date_utc.strftime("'%Y-%m-%d'")
+            end_str = end_date_utc.strftime("'%Y-%m-%d'")
             
             # Create work item type condition
             type_condition = ", ".join([f"'{type}'" for type in work_item_types])

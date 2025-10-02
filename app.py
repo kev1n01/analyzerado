@@ -39,6 +39,9 @@ with col1:
     start_datetime = datetime.combine(start_date, datetime.min.time())
     end_datetime = datetime.combine(end_date, datetime.max.time())
 
+    # Adjust to ADO timezone before sending the query
+    start_datetime_ado = azure_service.convert_app_to_ado(start_datetime)
+    end_datetime_ado = azure_service.convert_app_to_ado(end_datetime)
 with col2:
     # Team Project selection
     try:
@@ -81,8 +84,8 @@ if analyze_button and selected_states and selected_projects and work_item_types:
             query_results = azure_service.run_wiql_query(
                 selected_projects,
                 work_item_types,
-                start_datetime,
-                end_datetime
+                start_datetime_ado,
+                end_datetime_ado
             )
             
             if query_results and 'workItems' in query_results:
@@ -116,7 +119,8 @@ if analyze_button and selected_states and selected_projects and work_item_types:
                                 'Type': item.get('work_item_type', ''),
                                 'Area Path': item.get('area_path', ''),
                                 'Tags': item.get('tags', ''),
-                                'Date': pd.to_datetime(item['date']).strftime('%m/%d/%Y %H:%M')
+                                "Date": azure_service.convert_ado_to_app(datetime.strptime(item['date'].split('.')[0], '%Y-%m-%dT%H:%M:%S')).strftime('%m/%d/%Y %H:%M')
+                                # 'Date': pd.to_datetime(item['date']).strftime('%m/%d/%Y %H:%M')
                             })
                             
                             # Count for cross table
