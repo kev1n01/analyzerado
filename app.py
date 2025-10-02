@@ -3,9 +3,8 @@ import os
 from dotenv import load_dotenv
 from datetime import datetime
 import pandas as pd
-import plotly.express as px
-import json
 from src.services.azure_devops_service import AzureDevOpsService
+from src.config import all_states, all_work_item_types
 
 # Load environment variables
 load_dotenv()
@@ -18,18 +17,23 @@ AZURE_DEVOPS_PAT = os.getenv('AZURE_DEVOPS_PAT')
 azure_service = AzureDevOpsService(AZURE_DEVOPS_URL, AZURE_DEVOPS_PAT)
 
 # Streamlit UI
-st.title("Azure DevOps Work Item State Analysis")
+st.title("Analyzer WITs ADO")
+
+# Sidebar
+with st.sidebar:
+    st.subheader("Config Credentials")
+    st.text_input("Organitazion URL", AZURE_DEVOPS_URL, help="Enter your orgnization url")
+    st.text_input("PAT", AZURE_DEVOPS_PAT, type="password", help="Enter your personal access token")
 
 # Configuration section
-st.header("Configuration")
-
-col1, col2 = st.columns(2)
+st.set_page_config(layout="wide")
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     # Date range selection
     st.subheader("Date Range")
+    start_date = st.date_input("Start Date", datetime.now().date())  # First day of current month
     end_date = st.date_input("End Date", datetime.now().date())
-    start_date = st.date_input("Start Date", end_date.replace(day=1))  # First day of current month
 
     # Convert dates to datetime with time
     start_datetime = datetime.combine(start_date, datetime.min.time())
@@ -37,29 +41,20 @@ with col1:
 
 with col2:
     # Team Project selection
-    st.subheader("Team Projects")
     try:
         available_projects = azure_service.get_team_projects()
         selected_projects = st.multiselect(
-            "Select Projects",
+            "Select Team Projects",
             available_projects,
-            default=[available_projects[0]] if available_projects else None
+            default=[available_projects[0],available_projects[1]] if available_projects else None
         )
     except Exception as e:
         st.error(f"Error loading team projects: {str(e)}")
         selected_projects = []
 
 # State and Work Item Type selection
-col3, col4 = st.columns(2)
-
 with col3:
     # State selection
-    st.subheader("States to Analyze")
-    all_states = [
-        "New", "Active", "Resolved", "Closed",
-        "3.1 - Ready for Test", "3.2 - In Progress",
-        "3.3 - Failed Test", "3.4 - QA Approved"
-    ]
     selected_states = st.multiselect(
         "Select States",
         all_states,
@@ -68,18 +63,17 @@ with col3:
 
 with col4:
     # Work Item Types
-    st.subheader("Work Item Types")
     work_item_types = st.multiselect(
-        "Select Types",
-        ["Bug", "Product Backlog Item", "User Story"],
+        "Select Work Item Types",
+        all_work_item_types,
         default=["Bug", "Product Backlog Item"]
     )
 
 # Analysis button
-analyze_button = st.button("Analyze Work Items", type="primary")
+analyze_button = st.button("Go Analyze", type="primary", width="stretch", help="Click to start analyze",icon=":material/rocket_launch:")
 
 # Main content
-if analyze_button and selected_states and selected_projects:
+if analyze_button and selected_states and selected_projects and work_item_types:
     # Show progress
     with st.spinner("Fetching work items..."):
         try:
@@ -107,60 +101,117 @@ if analyze_button and selected_states and selected_projects:
                         end_datetime
                     )
                     
-                    # Display results
-                    st.header("Analysis Results")
-                    
-                    # Create summary DataFrame
-                    summary_data = {
-                        'State': [],
-                        'Count': [],
-                        'Details': []
-                    }
-                    
+                    # Prepare data for analysis
+                    all_items = []
+                    state_project_counts = {}
+
                     for state, data in analysis_results.items():
-                        summary_data['State'].append(state)
-                        summary_data['Count'].append(data['count'])
-                        items_str = "\n".join([
-                            f"ID: {item['id']} - {item['title']} ({item['project']})" 
-                            for item in data['items']
-                        ])
-                        summary_data['Details'].append(items_str)
-                    
-                    df = pd.DataFrame(summary_data)
-                    
-                    # Display chart
-                    if not df.empty:
-                        fig = px.bar(df, x='State', y='Count',
-                                   title="Work Items by State",
-                                   labels={'Count': 'Number of Work Items', 'State': 'State'})
-                        st.plotly_chart(fig)
-                    
+                        for item in data['items']:
+                            # Add to all items list
+                            all_items.append({
+                                'ID': f"{AZURE_DEVOPS_URL}/{item['project']}/_workitems/edit/{item['id']}",
+                                'Title': item['title'],
+                                'State': state,
+                                # 'Project': item['project'],
+                                'Type': item.get('work_item_type', ''),
+                                'Area Path': item.get('area_path', ''),
+                                'Tags': item.get('tags', ''),
+                                'Date': pd.to_datetime(item['date']).strftime('%m/%d/%Y %H:%M')
+                            })
+                            
+                            # Count for cross table
+                            project = item['project']
+                            if project not in state_project_counts:
+                                state_project_counts[project] = {}
+                            if state not in state_project_counts[project]:
+                                state_project_counts[project][state] = 0
+                            state_project_counts[project][state] += 1
+
+                    # Create and display cross table
+                    st.divider()
+                    if state_project_counts:
+                        st.subheader("State Count by Project")
+                        
+                        # Get unique states
+                        all_states = sorted(list(set(
+                            state 
+                            for project_counts in state_project_counts.values() 
+                            for state in project_counts.keys()
+                        )))
+                        
+                        # Create DataFrame for cross table
+                        cross_table_data = []
+                        for project in state_project_counts:
+                            row = {'Project': project}
+                            for state in all_states:
+                                row[state] = state_project_counts[project].get(state, 0)
+                            cross_table_data.append(row)
+                        
+                        cross_df = pd.DataFrame(cross_table_data)
+                        
+                        # Add total row and column
+                        cross_df['Total'] = cross_df[all_states].sum(axis=1)
+                        total_row = pd.DataFrame([{
+                            'Project': 'Total',
+                            **{state: cross_df[state].sum() for state in all_states},
+                            'Total': cross_df['Total'].sum()
+                        }])
+                        cross_df = pd.concat([cross_df, total_row])
+
+                    # Display detailed table
+                    if all_items:
+                        df = pd.DataFrame(all_items)
+                        # Reorder columns
+                        df = df[['ID', 'Title', 'Type', 'State', 'Date']]
+                        
+                        # Configure the dataframe display
+                        # Display cross table
+                        st.dataframe(
+                            cross_df,
+                            hide_index=True,
+                            column_config={
+                                "Project": st.column_config.Column(
+                                    "Project",
+                                    width="medium",
+                                    pinned="left"
+                                )
+                            }
+                        )
+
                     # Display detailed table
                     st.subheader("Detailed Results")
-                    for state, data in analysis_results.items():
-                        if data['count'] > 0:
-                            with st.expander(f"{state} ({data['count']} items)"):
-                                items_df = pd.DataFrame(data['items'])
-                                st.dataframe(items_df)
-                    
-                    # Export button
-                    export_data = {
-                        'analysis_date': datetime.now().isoformat(),
-                        'date_range': {
-                            'start': start_date.isoformat(),
-                            'end': end_date.isoformat()
-                        },
-                        'selected_states': selected_states,
-                        'selected_projects': selected_projects,
-                        'results': analysis_results
-                    }
-                    
-                    st.download_button(
-                        "Download JSON",
-                        data=json.dumps(export_data, indent=2),
-                        file_name="work_item_analysis.json",
-                        mime="application/json"
-                    )
+                    if all_items:
+                        df = pd.DataFrame(all_items)
+                        # Reorder columns
+                        df = df[['ID', 'Title', 'Type', 'State', 'Area Path', 'Tags', 'Date']]
+                        
+                        # Configure the dataframe display
+                        st.dataframe(
+                            df,
+                            hide_index=True,
+                            column_config={
+                                "ID": st.column_config.LinkColumn(
+                                    "ID",
+                                    width="small",
+                                    pinned="left",
+                                    help="Go to work item ADO",
+                                    display_text=r"(\d+)$"
+                                ),
+                                "Date": st.column_config.DatetimeColumn(
+                                    "Date",
+                                    format="MM/DD/YYYY HH:mm",
+                                    width="medium"
+                                ),
+                                "Area Path": st.column_config.Column(
+                                    "Area Path",
+                                    width="medium"
+                                ),
+                                "Tags": st.column_config.Column(
+                                    "Tags",
+                                    width="medium"
+                                )
+                            }
+                        )
                 else:
                     st.warning("No work items found for the selected criteria.")
             else:
@@ -172,3 +223,5 @@ else:
         st.warning("Please select at least one state to analyze.")
     if not selected_projects:
         st.warning("Please select at least one team project.")
+    if not work_item_types:
+        st.warning("Please select at least one work item type.")

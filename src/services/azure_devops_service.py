@@ -4,6 +4,7 @@ import base64
 from datetime import datetime
 from typing import List, Dict, Any
 import time
+from src.config import areasPathCOE, areasPathEDW
 
 class AzureDevOpsService:
     def __init__(self, url: str, pat: str):
@@ -12,6 +13,8 @@ class AzureDevOpsService:
             'Accept': 'application/json',
             'Authorization': f'Basic {str(base64.b64encode(f":{pat}".encode("ascii")).decode("ascii"))}'
         }
+        self.areaPathEDW = areasPathEDW
+        self.areaPathCOE = areasPathCOE
         self.cache = {}
         self.cache_duration = 3600
 
@@ -44,36 +47,76 @@ class AzureDevOpsService:
         }
         return result
 
+    def _execute_single_query(self, query: str) -> Dict:
+        """Execute a single WIQL query"""
+        url = f"{self.url}/_apis/wit/wiql?api-version=7.0"
+        response = requests.post(url, json={"query": query}, headers=self.headers)
+        response.raise_for_status()
+        return response.json()
+
     def run_wiql_query(self, team_projects: List[str], work_item_types: List[str],
                       start_date: datetime, end_date: datetime) -> Dict:
-        """Execute a WIQL query against Azure DevOps"""
+        """Execute WIQL queries for each project with its specific conditions"""
         try:
-            # Create project condition
-            project_condition = " OR ".join([f"[System.TeamProject] = '{project}'" for project in team_projects])
-            # Create work item type condition
-            type_condition = ", ".join([f"'{type}'" for type in work_item_types])
-            
             # Format dates in the correct format for WIQL (YYYY-MM-DD)
             start_str = start_date.strftime("'%Y-%m-%d'")
             end_str = end_date.strftime("'%Y-%m-%d'")
             
-            query = f"""
+            # Create work item type condition
+            type_condition = ", ".join([f"'{type}'" for type in work_item_types])
+            
+            # Base query structure
+            base_query = """
             SELECT [System.Id], [System.Title], [System.State], [System.WorkItemType],
-                   [Microsoft.VSTS.Common.StateChangeDate], [System.TeamProject]
+                   [Microsoft.VSTS.Common.StateChangeDate], [System.TeamProject],
+                   [System.AreaPath], [System.Tags]
             FROM WorkItems
-            WHERE ({project_condition})
+            WHERE {project_specific_condition}
             AND [System.WorkItemType] IN ({type_condition})
             AND [Microsoft.VSTS.Common.StateChangeDate] >= {start_str}
             AND [Microsoft.VSTS.Common.StateChangeDate] <= {end_str}
             ORDER BY [System.Id]
             """
-
-            print("QUERRRRRRRRRRRY!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", query)
-
-            url = f"{self.url}/_apis/wit/wiql?api-version=7.0"
-            response = requests.post(url, json={"query": query}, headers=self.headers)
-            response.raise_for_status()
-            return response.json()
+            
+            # Combined results
+            all_work_items = []
+            
+            # Execute separate queries for each project
+            for project in team_projects:
+                if project == "Enterprise Data Warehouse":
+                    project_condition = f"""
+                        [System.TeamProject] = '{project}'
+                        AND [System.AreaPath] IN ({', '.join([f"'{areaedw}'" for areaedw in self.areaPathEDW])})
+                    """
+                elif project == "COE Operations":
+                    project_condition = f"""
+                        [System.TeamProject] = '{project}'
+                        AND [System.AreaPath] IN ({', '.join([f"'{areacoe}'" for areacoe in self.areaPathCOE])})
+                        AND [System.Tags] CONTAINS 'DataOps'
+                    """
+                else:
+                    project_condition = f"[System.TeamProject] = '{project}'"
+                
+                # Format and execute query for this project
+                query = base_query.format(
+                    project_specific_condition=project_condition,
+                    type_condition=type_condition,
+                    start_str=start_str,
+                    end_str=end_str
+                )
+                
+                print(f"Executing query for {project}:", query)
+                print("||||||||||||||||||||||||||||||||||||||||||")
+                try:
+                    result = self._execute_single_query(query)
+                    if result and 'workItems' in result:
+                        all_work_items.extend(result['workItems'])
+                except requests.exceptions.RequestException as e:
+                    print(f"Error executing query for {project}: {str(e)}")
+                    continue  # Continue with next project if one fails
+            
+            # Return combined results in the same format
+            return {'workItems': all_work_items}
         except requests.exceptions.RequestException as e:
             raise Exception(f"Error executing WIQL query: {str(e)}")
 
@@ -143,7 +186,10 @@ class AzureDevOpsService:
                                     'id': work_item_id,
                                     'title': work_item['fields'].get('System.Title'),
                                     'date': state_date_str,
-                                    'project': work_item['fields'].get('System.TeamProject')
+                                    'project': work_item['fields'].get('System.TeamProject'),
+                                    'work_item_type': work_item['fields'].get('System.WorkItemType'),
+                                    'area_path': work_item['fields'].get('System.AreaPath'),
+                                    'tags': work_item['fields'].get('System.Tags', '')
                                 })
         
         return state_analysis
