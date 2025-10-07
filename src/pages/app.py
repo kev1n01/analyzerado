@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 from dotenv import load_dotenv
-from datetime import datetime, timezone
+from datetime import datetime
 import pandas as pd
 from src.services.azure_devops_service import AzureDevOpsService
 from src.config import all_states, all_work_item_types
@@ -117,7 +117,8 @@ if analyze_button and selected_states and selected_projects and work_item_types:
                                 'Type': item.get('work_item_type', ''),
                                 'Area Path': item.get('area_path', ''),
                                 'Tags': item.get('tags', ''),
-                                'State Change Date': pd.to_datetime(item['date']).strftime('%m/%d/%Y %H:%M')
+                                'State Change Date': pd.to_datetime(item['date']).strftime('%m/%d/%Y %H:%M'),
+                                'SCD UTC': pd.to_datetime(item['date']).strftime('%m/%d/%Y %H:%M')
                             })
                             
                             # Count for cross table
@@ -129,8 +130,8 @@ if analyze_button and selected_states and selected_projects and work_item_types:
                             state_project_counts[project][state] += 1
 
                     # Create and display cross table
-                    st.divider()
                     if state_project_counts:
+                        st.divider()
                         st.subheader("State Count by Project")
                         
                         # Get unique states
@@ -163,7 +164,7 @@ if analyze_button and selected_states and selected_projects and work_item_types:
                     if all_items:
                         df = pd.DataFrame(all_items)
                         # Reorder columns
-                        df = df[['ID', 'Title', 'Type', 'State', 'State Change Date']]
+                        df = df[['ID', 'Title', 'Type', 'State', 'State Change Date', 'SCD UTC']]
                         
                         # Configure the dataframe display
                         # Display cross table
@@ -178,13 +179,10 @@ if analyze_button and selected_states and selected_projects and work_item_types:
                                 )
                             }
                         )
-
-                    # Display detailed table
-                    if all_items:
                         st.subheader("Detailed Results")
                         df = pd.DataFrame(all_items)
                         # Reorder columns
-                        df = df[['ID', 'Title', 'Type', 'State', 'Area Path', 'Tags', 'State Change Date']]
+                        df = df[['ID', 'Title', 'Type', 'State', 'Area Path', 'Tags', 'State Change Date', 'SCD UTC']]
                         
                         # Configure the dataframe display
                         st.dataframe(
@@ -201,6 +199,11 @@ if analyze_button and selected_states and selected_projects and work_item_types:
                                 "State Change Date": st.column_config.DatetimeColumn(
                                     "State Change Date",
                                     timezone=str(get_localzone()),
+                                    format="MM/DD/YYYY HH:mm",
+                                    width="medium"
+                                ),
+                                "SCD UTC": st.column_config.DatetimeColumn(
+                                    "SCD UTC",
                                     format="MM/DD/YYYY HH:mm",
                                     width="medium"
                                 ),

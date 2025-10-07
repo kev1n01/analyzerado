@@ -5,6 +5,8 @@ from typing import List, Dict, Any
 import time
 from src.config import areasPathCOE, areasPathEDW
 import json
+import pytz
+from tzlocal import get_localzone
 
 class AzureDevOpsService:
     def __init__(self, url: str, pat: str):
@@ -182,9 +184,19 @@ class AzureDevOpsService:
         if isinstance(end_date, str):
             end_date = datetime.strptime(end_date, '%Y-%m-%d %H:%M:%S')
 
-        # Make sure both are timezone-aware or timezone-naive
-        if end_date.tzinfo is not None:
-            end_date = end_date.replace(tzinfo=None)
+        local_tz = str(get_localzone())
+        tz = pytz.timezone(local_tz)
+        print(f"Local timezone: {local_tz} | tz: {tz}")
+
+        print(f"Start: {start_date} | End: {end_date}")
+
+        # Localized start and end of day
+        local_start = tz.localize(start_date)
+        local_end = tz.localize(end_date)
+        print(f"Local Start: {local_start} | Local End (local): {local_end}")
+
+        start_utc = local_start.astimezone(timezone.utc)
+        end_utc = local_end.astimezone(timezone.utc)
 
         for work_item in work_items:
             work_item_id = work_item['id']
@@ -200,12 +212,11 @@ class AzureDevOpsService:
                         if state_date_str:
                             clean_date_str = state_date_str.replace('Z', '').split('.')[0]
                             state_date = datetime.strptime(clean_date_str, '%Y-%m-%dT%H:%M:%S')
-                            print(f"Type start_date: {type(start_date)}")
-                            print(f"Type state_date: {type(state_date)}")
-                            print(f"Type end_date: {type(end_date)}")
-                            print(f"{start_date} <=  {state_date} >= {end_date}")
-                            print(start_date <= state_date <= end_date)
-                            if start_date <= state_date <= end_date:
+                            state_date = state_date.replace(tzinfo=timezone.utc)
+                            print(f"RecordId: {update['id']} | WITid: {update['workItemId']}")
+                            print(f"{datetime.strftime(start_utc,'%Y-%m-%d %H:%M:%S')} <=  {datetime.strftime(state_date,'%Y-%m-%d %H:%M:%S')} <= {datetime.strftime(end_utc,'%Y-%m-%d %H:%M:%S')}")
+                            print(start_utc <= state_date <= end_utc)
+                            if start_utc <= state_date <= end_utc:
                                 state_analysis[new_state]['count'] += 1
                                 state_analysis[new_state]['items'].append({
                                     'id': work_item_id,
