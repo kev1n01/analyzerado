@@ -198,7 +198,8 @@ class AzureDevOpsService:
                         state_date_str = update.get('fields', {}).get(
                             'Microsoft.VSTS.Common.StateChangeDate', {}).get('newValue')
                         if state_date_str:
-                            state_date = datetime.strptime(state_date_str.split('.')[0], '%Y-%m-%dT%H:%M:%S')
+                            clean_date_str = state_date_str.replace('Z', '').split('.')[0]
+                            state_date = datetime.strptime(clean_date_str, '%Y-%m-%dT%H:%M:%S')
                             print(f"Type start_date: {type(start_date)}")
                             print(f"Type state_date: {type(state_date)}")
                             print(f"Type end_date: {type(end_date)}")
