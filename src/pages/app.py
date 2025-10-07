@@ -1,10 +1,11 @@
 import streamlit as st
 import os
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 from src.services.azure_devops_service import AzureDevOpsService
 from src.config import all_states, all_work_item_types
+from tzlocal import get_localzone
 
 # Load environment variables
 load_dotenv()
@@ -17,13 +18,8 @@ AZURE_DEVOPS_PAT = os.getenv('AZURE_DEVOPS_PAT')
 azure_service = AzureDevOpsService(AZURE_DEVOPS_URL, AZURE_DEVOPS_PAT)
 
 # Streamlit UI
-st.title("Analyzer WITs ADO")
-
-# Sidebar
-with st.sidebar:
-    st.subheader("Config Credentials")
-    st.text_input("Organitazion URL", AZURE_DEVOPS_URL, help="Enter your orgnization url")
-    st.text_input("PAT", AZURE_DEVOPS_PAT, type="password", help="Enter your personal access token")
+local_tz = datetime.now().astimezone().tzinfo
+st.title(f"Analyzer WITs ADO")
 
 # Configuration section
 st.set_page_config(layout="wide")
@@ -31,8 +27,9 @@ col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     # Date range selection
-    st.subheader("Date Range")
-    start_date = st.date_input("Start Date", datetime.now().date())  # First day of current month
+    # st.subheader("Date Range")
+    st.badge(f"Timezone: (UTC{local_tz}:00) {str(get_localzone())} ", icon=":material/globe_location_pin:")
+    start_date = st.date_input("Start Date", datetime.now().date())
     end_date = st.date_input("End Date", datetime.now().date())
 
     # Convert dates to datetime with time
@@ -84,7 +81,11 @@ if analyze_button and selected_states and selected_projects and work_item_types:
                 start_datetime,
                 end_datetime
             )
-            
+
+            with st.expander("Query after UTC conversion"):
+              for q in query_results['queries']:
+                st.code(q, language="sql")
+
             if query_results and 'workItems' in query_results:
                 # Get work item IDs
                 work_item_ids = [item['id'] for item in query_results['workItems']]
@@ -116,7 +117,7 @@ if analyze_button and selected_states and selected_projects and work_item_types:
                                 'Type': item.get('work_item_type', ''),
                                 'Area Path': item.get('area_path', ''),
                                 'Tags': item.get('tags', ''),
-                                'Date': pd.to_datetime(item['date']).strftime('%m/%d/%Y %H:%M')
+                                'State Change Date': pd.to_datetime(item['date']).strftime('%m/%d/%Y %H:%M')
                             })
                             
                             # Count for cross table
@@ -162,7 +163,7 @@ if analyze_button and selected_states and selected_projects and work_item_types:
                     if all_items:
                         df = pd.DataFrame(all_items)
                         # Reorder columns
-                        df = df[['ID', 'Title', 'Type', 'State', 'Date']]
+                        df = df[['ID', 'Title', 'Type', 'State', 'State Change Date']]
                         
                         # Configure the dataframe display
                         # Display cross table
@@ -179,11 +180,11 @@ if analyze_button and selected_states and selected_projects and work_item_types:
                         )
 
                     # Display detailed table
-                    st.subheader("Detailed Results")
                     if all_items:
+                        st.subheader("Detailed Results")
                         df = pd.DataFrame(all_items)
                         # Reorder columns
-                        df = df[['ID', 'Title', 'Type', 'State', 'Area Path', 'Tags', 'Date']]
+                        df = df[['ID', 'Title', 'Type', 'State', 'Area Path', 'Tags', 'State Change Date']]
                         
                         # Configure the dataframe display
                         st.dataframe(
@@ -197,8 +198,9 @@ if analyze_button and selected_states and selected_projects and work_item_types:
                                     help="Go to work item ADO",
                                     display_text=r"(\d+)$"
                                 ),
-                                "Date": st.column_config.DatetimeColumn(
-                                    "Date",
+                                "State Change Date": st.column_config.DatetimeColumn(
+                                    "State Change Date",
+                                    timezone=str(get_localzone()),
                                     format="MM/DD/YYYY HH:mm",
                                     width="medium"
                                 ),

@@ -1,6 +1,6 @@
 import requests
 import base64
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any
 import time
 from src.config import areasPathCOE, areasPathEDW
@@ -49,7 +49,7 @@ class AzureDevOpsService:
 
     def _execute_single_query(self, query: str) -> Dict:
         """Execute a single WIQL query"""
-        url = f"{self.url}/_apis/wit/wiql?api-version=7.0"
+        url = f"{self.url}/_apis/wit/wiql?timePrecision=true&api-version=7.0"
         response = requests.post(url, json={"query": query}, headers=self.headers)
         response.raise_for_status()
         data = response.json()
@@ -61,41 +61,50 @@ class AzureDevOpsService:
                       start_date: datetime, end_date: datetime) -> Dict:
         """Execute WIQL queries for each project with its specific conditions"""
         try:
-            # Format dates in the correct format for WIQL (YYYY-MM-DD)
-            start_str = start_date.strftime("'%Y-%m-%d'")
-            end_str = end_date.strftime("'%Y-%m-%d'")
-            
+            # get local timezone
+            local_tz = datetime.now().astimezone().tzinfo
+
+            if start_date.tzinfo is None:
+                start_date = start_date.replace(tzinfo=local_tz)
+            if end_date.tzinfo is None:
+                end_date = end_date.replace(tzinfo=local_tz)
+
+            start_utc = start_date.astimezone(timezone.utc)
+            end_utc = end_date.astimezone(timezone.utc)
+
+            start_str = start_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            end_str = end_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
             # Create work item type condition
             type_condition = ", ".join([f"'{type}'" for type in work_item_types])
             
             # Base query structure
             base_query = """
-            SELECT [System.Id], [System.Title], [System.State], [System.WorkItemType],
-                   [Microsoft.VSTS.Common.StateChangeDate], [System.TeamProject],
-                   [System.AreaPath], [System.Tags]
+            SELECT [System.Id]
             FROM WorkItems
-            WHERE {project_specific_condition}
+            {project_specific_condition}
             AND [System.WorkItemType] IN ({type_condition})
-            AND [Microsoft.VSTS.Common.StateChangeDate] >= {start_str}
-            AND [Microsoft.VSTS.Common.StateChangeDate] <= {end_str}
+            AND [Microsoft.VSTS.Common.StateChangeDate] >= '{start_str}'
+            AND [Microsoft.VSTS.Common.StateChangeDate] <= '{end_str}'
             ORDER BY [System.Id]
-            """
+            """.strip()
             
             # Combined results
             all_work_items = []
+            queries = []
             
             # Execute separate queries for each project
             for project in team_projects:
                 if project == "Enterprise Data Warehouse":
                     project_condition = f"""
-                        [System.TeamProject] = '{project}'
-                        AND [System.AreaPath] IN ({', '.join([f"'{areaedw}'" for areaedw in self.areaPathEDW])})
+            WHERE [System.TeamProject] = '{project}'
+            AND [System.AreaPath] IN ({', '.join([f"'{areaedw}'" for areaedw in self.areaPathEDW])})
                     """
                 elif project == "COE Operations":
                     project_condition = f"""
-                        [System.TeamProject] = '{project}'
-                        AND [System.AreaPath] IN ({', '.join([f"'{areacoe}'" for areacoe in self.areaPathCOE])})
-                        AND [System.Tags] CONTAINS 'DataOps'
+            WHERE [System.TeamProject] = '{project}'
+            AND [System.AreaPath] IN ({', '.join([f"'{areacoe}'" for areacoe in self.areaPathCOE])})
+            AND [System.Tags] CONTAINS 'DataOps'
                     """
                 else:
                     project_condition = f"[System.TeamProject] = '{project}'"
@@ -107,7 +116,7 @@ class AzureDevOpsService:
                     start_str=start_str,
                     end_str=end_str
                 )
-                
+                queries.append(query)
                 print(f"Executing query for {project}:", query)
                 try:
                     result = self._execute_single_query(query)
@@ -118,7 +127,7 @@ class AzureDevOpsService:
                     continue  # Continue with next project if one fails
             
             # Return combined results in the same format
-            return {'workItems': all_work_items}
+            return {'workItems': all_work_items, 'queries': queries}
         except requests.exceptions.RequestException as e:
             raise Exception(f"Error executing WIQL query: {str(e)}")
 
@@ -168,7 +177,15 @@ class AzureDevOpsService:
                             start_date: datetime, end_date: datetime) -> Dict[str, Dict]:
         """Analyze state changes for work items within the date range"""
         state_analysis = {state: {'count': 0, 'items': []} for state in selected_states}
-        
+        if isinstance(start_date, str):
+            start_date = datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S')
+        if isinstance(end_date, str):
+            end_date = datetime.strptime(end_date, '%Y-%m-%d %H:%M:%S')
+
+        # Make sure both are timezone-aware or timezone-naive
+        if end_date.tzinfo is not None:
+            end_date = end_date.replace(tzinfo=None)
+
         for work_item in work_items:
             work_item_id = work_item['id']
             
@@ -182,6 +199,11 @@ class AzureDevOpsService:
                             'Microsoft.VSTS.Common.StateChangeDate', {}).get('newValue')
                         if state_date_str:
                             state_date = datetime.strptime(state_date_str.split('.')[0], '%Y-%m-%dT%H:%M:%S')
+                            print(f"Type start_date: {type(start_date)}")
+                            print(f"Type state_date: {type(state_date)}")
+                            print(f"Type end_date: {type(end_date)}")
+                            print(f"{start_date} <=  {state_date} >= {end_date}")
+                            print(start_date <= state_date <= end_date)
                             if start_date <= state_date <= end_date:
                                 state_analysis[new_state]['count'] += 1
                                 state_analysis[new_state]['items'].append({
