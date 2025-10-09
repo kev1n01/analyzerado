@@ -7,6 +7,8 @@ from src.config import areasPathCOE, areasPathEDW
 import json
 import pytz
 from tzlocal import get_localzone
+from src.helpers import setup_logger
+logger = setup_logger('azure_devops_service')
 
 class AzureDevOpsService:
     def __init__(self, url: str, pat: str):
@@ -68,7 +70,7 @@ class AzureDevOpsService:
 
             all_revisions = []
             
-            print("==================================================START=================================================")
+            logger.info("==================================================START=================================================")
             # Execute separate queries for each project
             for project in team_projects:
                 url = f"{self.url}/{project}/_apis/wit/reporting/workitemrevisions?api-version=7.1"
@@ -79,7 +81,7 @@ class AzureDevOpsService:
                     'fields': 'System.Id,System.Title,System.WorkItemType,System.State,System.AreaPath,System.Tags,System.TeamProject,Microsoft.VSTS.Common.StateChangeDate'
                 }
                 
-                print(f"Fetching revisions for {project} from {start_str}")
+                logger.info(f"Fetching revisions for {project} from {start_str}")
                 
                 try:
                     response = requests.get(url, headers=self.headers, params=params)
@@ -93,7 +95,7 @@ class AzureDevOpsService:
                             if rev.get('fields', {}).get('System.WorkItemType') in work_item_types
                         ]
                         all_revisions.extend(filtered_revisions)
-                        print(f"Found {len(filtered_revisions)} revisions for {project}")
+                        logger.info(f"Found {len(filtered_revisions)} revisions for {project}")
                         
                         desired_fields = [
                             "System.Id",
@@ -111,10 +113,10 @@ class AzureDevOpsService:
                             fields = item.get("fields", {})
                             filtered = {field: fields.get(field, None) for field in desired_fields}
                             filtered_items.append(filtered)
-                        print(f"JSON data: {json.dumps(filtered_items, indent=2)}") 
+                        logger.info(f"Filtered items: {json.dumps(filtered_items, indent=2)}")
                         
                 except requests.exceptions.RequestException as e:
-                    print(f"Error fetching revisions for {project}: {str(e)}")
+                    logger.error(f"Error fetching revisions for {project}: {str(e)}")
                     continue
                 
                 time.sleep(0.1)
@@ -172,7 +174,7 @@ class AzureDevOpsService:
             state_date = state_date.replace(tzinfo=timezone.utc)
             is_within_range = start_utc <= state_date <= end_utc
             
-            print(f"RevId: {fields.get('rev')} | WITid: {work_item_id} | {datetime.strftime(start_utc,'%Y-%m-%d %H:%M:%S')} <=  {datetime.strftime(state_date,'%Y-%m-%d %H:%M:%S')} <= {datetime.strftime(end_utc,'%Y-%m-%d %H:%M:%S')} | {is_within_range}")
+            logger.info(f"RevId: {fields.get('rev')} | WITid: {work_item_id} | {datetime.strftime(start_utc,'%Y-%m-%d %H:%M:%S')} <=  {datetime.strftime(state_date,'%Y-%m-%d %H:%M:%S')} <= {datetime.strftime(end_utc,'%Y-%m-%d %H:%M:%S')} | {is_within_range}")
             # Check if state change falls within the date range
             if is_within_range:
                 # Create unique key to avoid duplicate entries
@@ -192,6 +194,6 @@ class AzureDevOpsService:
                         'tags': fields.get('System.Tags', '')
                     })
         
-        print("==================================================FINISH=================================================")
-        
+        logger.info("==================================================FINISH=================================================")
+
         return state_analysis

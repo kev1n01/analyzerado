@@ -1,39 +1,53 @@
-from datetime import datetime, timezone
-import pytz
-import re
-from tzlocal import get_localzone
+import logging
+import os
+from datetime import datetime
 
-def convert_dates_to_utc(query_text: str = None, user_timezone: str = str(get_localzone())):
+def setup_logger(name, log_dir="logs"):
     """
-    Converts local date-only filters (YYYY-MM-DD) in WIQL query to UTC datetimes,
-    using start_utc for >= and end_utc for <=.
-    """
-    tz = pytz.timezone(user_timezone)
-
-    # Match operator + date, e.g., ">= '2025-10-05'" or "<= '2025-10-05'"
-    pattern = r"([<>]=)\s*'(\d{4}-\d{2}-\d{2})'"
-
-    def replace_date(match):
-        operator = match.group(1)
-        date_str = match.group(2)
-        local_date = datetime.strptime(date_str, "%Y-%m-%d")
-
-        # Localized start and end of day
-        local_start = tz.localize(datetime.combine(local_date, datetime.min.time()))
-        local_end = tz.localize(datetime.combine(local_date, datetime.max.time()))
-
-        # Convert to UTC
-        start_utc = local_start.astimezone(timezone.utc)
-        end_utc = local_end.astimezone(timezone.utc)
-
-        # Choose correct UTC depending on operator
-        if operator == ">=":
-            utc_value = start_utc
-        elif operator == "<=":
-            utc_value = end_utc
-        else:
-            utc_value = start_utc
-
-        return f"{operator} '{utc_value.strftime('%Y-%m-%dT%H:%M:%S.000Z')}'"
+    Setup a logger that writes to both console and file
     
-    return re.sub(pattern, replace_date, query_text)
+    Args:
+        name: Logger name
+        log_dir: Directory where logs will be stored (default: "logs")
+    
+    Returns:
+        logging.Logger: Configured logger instance
+    """
+    
+    # Create logs directory if it doesn't exist
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    
+    # Create logger
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+    
+    # Avoid duplicate handlers
+    if logger.hasHandlers():
+        return logger
+    
+    # Create formatters
+    detailed_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # File handler - logs everything
+    log_filename = os.path.join(log_dir, f"{name}_{datetime.now().strftime('%Y%m%d')}.log")
+    file_handler = logging.FileHandler(log_filename)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(detailed_formatter)
+    logger.addHandler(file_handler)
+    
+    # Console handler - logs only warnings and above
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter('%(levelname)s: %(message)s')
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+
+# At the top of the file, after imports:
+logger = setup_logger('azure_devops_service')
