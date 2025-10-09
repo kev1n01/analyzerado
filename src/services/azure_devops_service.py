@@ -49,23 +49,13 @@ class AzureDevOpsService:
         }
         return result
 
-    def _execute_single_query(self, query: str) -> Dict:
-        """Execute a single WIQL query"""
-        url = f"{self.url}/_apis/wit/wiql?timePrecision=true&api-version=7.0"
-        response = requests.post(url, json={"query": query}, headers=self.headers)
-        response.raise_for_status()
-        data = response.json()
-        print(f"Response to the Query:\n{json.dumps(data['workItems'], indent=4)}")
-        print("=====================================================")
-        return data
-
-    def run_wiql_query(self, team_projects: List[str], work_item_types: List[str],
-                      start_date: datetime, end_date: datetime) -> Dict:
-        """Execute WIQL queries for each project with its specific conditions"""
+    def get_work_item_revisions(self, team_projects: List[str], work_item_types: List[str],
+                                start_date: datetime, end_date: datetime) -> Dict:
+        """Get work item revisions using the reporting API"""
         try:
-            # get local timezone
+            # Get local timezone
             local_tz = datetime.now().astimezone().tzinfo
-
+            
             if start_date.tzinfo is None:
                 start_date = start_date.replace(tzinfo=local_tz)
             if end_date.tzinfo is None:
@@ -74,111 +64,74 @@ class AzureDevOpsService:
             start_utc = start_date.astimezone(timezone.utc)
             end_utc = end_date.astimezone(timezone.utc)
 
-            start_str = start_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-            end_str = end_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            start_str = start_utc.strftime("%Y-%m-%dT%H:%M:%S")
 
-            # Create work item type condition
-            type_condition = ", ".join([f"'{type}'" for type in work_item_types])
+            all_revisions = []
             
-            # Base query structure
-            base_query = """
-            SELECT [System.Id]
-            FROM WorkItems
-            {project_specific_condition}
-            AND [System.WorkItemType] IN ({type_condition})
-            AND [Microsoft.VSTS.Common.StateChangeDate] >= '{start_str}'
-            AND [Microsoft.VSTS.Common.StateChangeDate] <= '{end_str}'
-            ORDER BY [System.Id]
-            """.strip()
-            
-            # Combined results
-            all_work_items = []
-            queries = []
-            
+            print("==================================================START=================================================")
             # Execute separate queries for each project
             for project in team_projects:
-                if project == "Enterprise Data Warehouse":
-                    project_condition = f"""
-            WHERE [System.TeamProject] = '{project}'
-            AND [System.AreaPath] IN ({', '.join([f"'{areaedw}'" for areaedw in self.areaPathEDW])})
-                    """
-                elif project == "COE Operations":
-                    project_condition = f"""
-            WHERE [System.TeamProject] = '{project}'
-            AND [System.AreaPath] IN ({', '.join([f"'{areacoe}'" for areacoe in self.areaPathCOE])})
-            AND [System.Tags] CONTAINS 'DataOps'
-                    """
-                else:
-                    project_condition = f"[System.TeamProject] = '{project}'"
+                url = f"{self.url}/{project}/_apis/wit/reporting/workitemrevisions?api-version=7.1"
                 
-                # Format and execute query for this project
-                query = base_query.format(
-                    project_specific_condition=project_condition,
-                    type_condition=type_condition,
-                    start_str=start_str,
-                    end_str=end_str
-                )
-                queries.append(query)
-                print(f"Executing query for {project}:", query)
+                # Add query parameters
+                params = {
+                    'startDateTime': start_str,
+                    'fields': 'System.Id,System.Title,System.WorkItemType,System.State,System.AreaPath,System.Tags,System.TeamProject,Microsoft.VSTS.Common.StateChangeDate'
+                }
+                
+                print(f"Fetching revisions for {project} from {start_str}")
+                
                 try:
-                    result = self._execute_single_query(query)
-                    if result and 'workItems' in result:
-                        all_work_items.extend(result['workItems'])
+                    response = requests.get(url, headers=self.headers, params=params)
+                    response.raise_for_status()
+                    
+                    data = response.json()
+                    if 'values' in data:
+                        # Filter by work item type
+                        filtered_revisions = [
+                            rev for rev in data['values']
+                            if rev.get('fields', {}).get('System.WorkItemType') in work_item_types
+                        ]
+                        all_revisions.extend(filtered_revisions)
+                        print(f"Found {len(filtered_revisions)} revisions for {project}")
+                        
+                        desired_fields = [
+                            "System.Id",
+                            "System.Title",
+                            "System.WorkItemType",
+                            "System.State",
+                            "System.AreaPath",
+                            "System.Tags",
+                            "System.TeamProject",
+                            "Microsoft.VSTS.Common.StateChangeDate"
+                        ]
+
+                        filtered_items = []
+                        for item in data['values']:
+                            fields = item.get("fields", {})
+                            filtered = {field: fields.get(field, None) for field in desired_fields}
+                            filtered_items.append(filtered)
+                        print(f"JSON data: {json.dumps(filtered_items, indent=2)}") 
+                        
                 except requests.exceptions.RequestException as e:
-                    print(f"Error executing query for {project}: {str(e)}")
-                    continue  # Continue with next project if one fails
-            
-            # Return combined results in the same format
-            return {'workItems': all_work_items, 'queries': queries}
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Error executing WIQL query: {str(e)}")
-
-    def get_work_items(self, ids: List[int]) -> List[Dict]:
-        """Get work items details by IDs with batching"""
-        cached = self._get_cached_result('get_work_items', ids)
-        if cached:
-            return cached
-
-        try:
-            batch_size = 200
-            all_work_items = []
-            
-            for i in range(0, len(ids), batch_size):
-                batch_ids = ids[i:i + batch_size]
-                id_string = ','.join(map(str, batch_ids))
-                url = f"{self.url}/_apis/wit/workitems?ids={id_string}&api-version=7.0"
+                    print(f"Error fetching revisions for {project}: {str(e)}")
+                    continue
                 
-                response = requests.get(url, headers=self.headers)
-                response.raise_for_status()
-                
-                batch_results = response.json()
-                all_work_items.extend(batch_results.get('value', []))
                 time.sleep(0.1)
             
-            return self._cache_result('get_work_items', ids, result=all_work_items)
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Error fetching work items: {str(e)}")
+            return {
+                'revisions': all_revisions,
+                'start_date': start_utc,
+                'end_date': end_utc
+            }
+        except Exception as e:
+            raise Exception(f"Error fetching work item revisions: {str(e)}")
 
-    def get_work_item_updates(self, work_item_id: int) -> List[Dict]:
-        """Get the update history of a work item"""
-        cached = self._get_cached_result('get_work_item_updates', work_item_id)
-        if cached:
-            return cached
-
-        try:
-            url = f"{self.url}/_apis/wit/workitems/{work_item_id}/updates?api-version=7.0"
-            response = requests.get(url, headers=self.headers)
-            response.raise_for_status()
-            
-            updates = response.json().get('value', [])
-            return self._cache_result('get_work_item_updates', work_item_id, result=updates)
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Error fetching work item updates for ID {work_item_id}: {str(e)}")
-
-    def analyze_state_changes(self, work_items: List[Dict], selected_states: List[str],
+    def analyze_state_changes(self, revisions_data: Dict, selected_states: List[str],
                             start_date: datetime, end_date: datetime) -> Dict[str, Dict]:
-        """Analyze state changes for work items within the date range"""
+        """Analyze state changes from revisions data"""
         state_analysis = {state: {'count': 0, 'items': []} for state in selected_states}
+        
         if isinstance(start_date, str):
             start_date = datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S')
         if isinstance(end_date, str):
@@ -186,46 +139,59 @@ class AzureDevOpsService:
 
         local_tz = str(get_localzone())
         tz = pytz.timezone(local_tz)
-        print(f"Local timezone: {local_tz} | tz: {tz}")
-
-        print(f"Start: {start_date} | End: {end_date}")
-
+        
         # Localized start and end of day
         local_start = tz.localize(start_date)
         local_end = tz.localize(end_date)
-        print(f"Local Start: {local_start} | Local End (local): {local_end}")
-
+        
         start_utc = local_start.astimezone(timezone.utc)
         end_utc = local_end.astimezone(timezone.utc)
 
-        for work_item in work_items:
-            work_item_id = work_item['id']
+        revisions = revisions_data.get('revisions', [])
+        
+        # Track processed work items to avoid duplicates
+        processed_items = set()
+        
+        for revision in revisions:
+            fields = revision.get('fields', {})
+            work_item_id = fields.get('System.Id')
+            current_state = fields.get('System.State')
+            state_change_date_str = fields.get('Microsoft.VSTS.Common.StateChangeDate')
             
-            # Check historical states
-            updates = self.get_work_item_updates(work_item_id)
-            for update in updates:
-                if 'fields' in update and 'System.State' in update['fields']:
-                    new_state = update['fields']['System.State'].get('newValue')
-                    if new_state in selected_states:
-                        state_date_str = update.get('fields', {}).get(
-                            'Microsoft.VSTS.Common.StateChangeDate', {}).get('newValue')
-                        if state_date_str:
-                            clean_date_str = state_date_str.replace('Z', '').split('.')[0]
-                            state_date = datetime.strptime(clean_date_str, '%Y-%m-%dT%H:%M:%S')
-                            state_date = state_date.replace(tzinfo=timezone.utc)
-                            print(f"RecordId: {update['id']} | WITid: {update['workItemId']}")
-                            print(f"{datetime.strftime(start_utc,'%Y-%m-%d %H:%M:%S')} <=  {datetime.strftime(state_date,'%Y-%m-%d %H:%M:%S')} <= {datetime.strftime(end_utc,'%Y-%m-%d %H:%M:%S')}")
-                            print(start_utc <= state_date <= end_utc)
-                            if start_utc <= state_date <= end_utc:
-                                state_analysis[new_state]['count'] += 1
-                                state_analysis[new_state]['items'].append({
-                                    'id': work_item_id,
-                                    'title': work_item['fields'].get('System.Title'),
-                                    'date': state_date_str,
-                                    'project': work_item['fields'].get('System.TeamProject'),
-                                    'work_item_type': work_item['fields'].get('System.WorkItemType'),
-                                    'area_path': work_item['fields'].get('System.AreaPath'),
-                                    'tags': work_item['fields'].get('System.Tags', '')
-                                })
+            # Skip if state is not in selected states
+            if current_state not in selected_states:
+                continue
+            
+            # Skip if no state change date
+            if not state_change_date_str:
+                continue
+            
+            # Parse the state change date
+            clean_date_str = state_change_date_str.replace('Z', '').split('.')[0]
+            state_date = datetime.strptime(clean_date_str, '%Y-%m-%dT%H:%M:%S')
+            state_date = state_date.replace(tzinfo=timezone.utc)
+            is_within_range = start_utc <= state_date <= end_utc
+            
+            print(f"RevId: {fields.get('rev')} | WITid: {work_item_id} | {datetime.strftime(start_utc,'%Y-%m-%d %H:%M:%S')} <=  {datetime.strftime(state_date,'%Y-%m-%d %H:%M:%S')} <= {datetime.strftime(end_utc,'%Y-%m-%d %H:%M:%S')} | {is_within_range}")
+            # Check if state change falls within the date range
+            if is_within_range:
+                # Create unique key to avoid duplicate entries
+                item_key = (work_item_id, current_state, state_change_date_str)
+                
+                if item_key not in processed_items:
+                    processed_items.add(item_key)
+                    
+                    state_analysis[current_state]['count'] += 1
+                    state_analysis[current_state]['items'].append({
+                        'id': work_item_id,
+                        'title': fields.get('System.Title'),
+                        'date': state_change_date_str,
+                        'project': fields.get('System.TeamProject'),
+                        'work_item_type': fields.get('System.WorkItemType'),
+                        'area_path': fields.get('System.AreaPath'),
+                        'tags': fields.get('System.Tags', '')
+                    })
+        
+        print("==================================================FINISH=================================================")
         
         return state_analysis
