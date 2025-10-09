@@ -21,13 +21,13 @@ azure_service = AzureDevOpsService(AZURE_DEVOPS_URL, AZURE_DEVOPS_PAT)
 # Streamlit UI
 local_tz = datetime.now().astimezone().tzinfo
 st.title(f"Analyzer WITs ADO")
+st.badge(f"Timezone: ({local_tz}) {str(get_localzone())} ", icon=":material/globe_location_pin:")
 
 # Configuration section
 st.set_page_config(layout="wide")
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    st.badge(f"Timezone: ({local_tz}) {str(get_localzone())} ", icon=":material/globe_location_pin:")
     start_date = st.date_input("Start Date", datetime.now().date(), format="MM/DD/YYYY")
     end_date = st.date_input("End Date", datetime.now().date(), format="MM/DD/YYYY")
 

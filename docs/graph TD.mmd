@@ -1,0 +1,35 @@
+graph TD
+    A[User selects filters in App] -->|Start Date, End Date, Projects, States, Work Item Types| B[Convert local dates to UTC]
+    B --> C[Stage 1: Call Reporting API]
+    C -->|GET /reporting/workitemrevisions| D["Reporting API returns revisions"]
+    D --> E{Any revisions<br/>found?}
+    
+    E -->|No| F["Display: No work items found"]
+    E -->|Yes| G["Extract candidate Work Item filtered by States, Types and tags"]
+    
+    G --> H[Stage 2: Validate each Work Item]
+    H --> I["Call Updates API<br/>GET /workitems/{id}/updates"]
+    I --> J["Retrieve complete update history"]
+    J --> K{"StateChangeDate<br/>within date range?"}
+    
+    K -->|No| L["Skip Work Item"]
+    K -->|Yes| M["Add to analysis results"]
+    
+    L --> N{More Work Items<br/>to validate?}
+    M --> N
+    
+    N -->|Yes| I
+    N -->|No| O["Build cross-project summary<br/>State counts by Project"]
+    
+    O --> P["Format results for display"]
+    P --> Q["Display cross-tabulation table"]
+    Q --> R["Display detailed results table"]
+    
+    style A fill:#fff9c4,color:#000
+    style C fill:#fff9c4,color:#000
+    style D fill:#fff9c4,color:#000
+    style I fill:#f3e5f5,color:#000
+    style H fill:#fff9c4,color:#000
+    style K fill:#ffe0b2,color:#000
+    style M fill:#c8e6c9,color:#000
+    style Q fill:#c8e6c9,color:#000

@@ -1,0 +1,34 @@
+sequenceDiagram
+    autonumber
+    participant User
+    participant App
+    participant ReportingAPI
+    participant UpdatesAPI
+
+    User->>App: Select filters (Start Date, End Date, Projects, States, Types)
+    App->>App: Convert local dates to UTC
+
+    App->>ReportingAPI: GET /reporting/workitemrevisions
+    ReportingAPI-->>App: Return revisions
+
+    alt No revisions found
+        App->>User: Display "No work items found"
+    else Revisions found
+        App->>App: Extract candidate Work Items (filter by States, Types, Tags)
+
+        loop For each Work Item
+            App->>UpdatesAPI: GET /workitems/{id}/updates
+            UpdatesAPI-->>App: Return complete update history
+
+            alt StateChangeDate within range
+                App->>App: Add to analysis results
+            else Outside date range
+                App->>App: Skip Work Item
+            end
+        end
+
+        App->>App: Build cross-project summary (State counts by Project)
+        App->>App: Format results for display
+        App->>User: Display cross-tabulation table
+        App->>User: Display detailed results table
+    end
