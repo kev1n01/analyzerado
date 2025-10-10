@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 from src.services.azure_devops_service import AzureDevOpsService
 from src.config import all_states, all_work_item_types
@@ -205,7 +205,12 @@ if analyze_button and selected_states and selected_projects and work_item_types:
             
             # Store in session state
             st.session_state.analysis_df = df
-            
+            df["State Change Date"] = (
+                pd.to_datetime(df["State Change Date"], utc=True, errors="coerce")
+                .dt.tz_convert(get_localzone())  
+                - timedelta(hours=2)
+            )
+
             st.dataframe(
                 df,
                 hide_index=True,
