@@ -20,8 +20,15 @@ azure_service = AzureDevOpsService(AZURE_DEVOPS_URL, AZURE_DEVOPS_PAT)
 
 # Streamlit UI
 local_tz = datetime.now().astimezone().tzinfo
-st.title(f"Analyzer WITs ADO")
+st.title(f"Analyzer WITs ADO - Historical Analysis")
 st.badge(f"Timezone: ({local_tz}) {str(get_localzone())} ", icon=":material/globe_location_pin:")
+
+
+# Initialize session state for caching results
+if 'analysis_df' not in st.session_state:
+    st.session_state.analysis_df = None
+if 'cross_df' not in st.session_state:
+    st.session_state.cross_df = None
 
 # Configuration section
 st.set_page_config(layout="wide")
@@ -67,18 +74,12 @@ with col4:
 # Analysis button
 analyze_button = st.button("Go Analyze", type="primary", width="stretch", help="Click to start analyze", icon=":material/rocket_launch:")
 
-if 'run_download' not in st.session_state:
-    st.session_state.run_download = False
-
-# Main content
 if analyze_button and selected_states and selected_projects and work_item_types:
-    st.session_state.run_download = True
-
     try:
         with st.status("Fetching work item revisions...", expanded=True) as status:
-            st.write("Retrieving revisions from Azure DevOps...")
+            st.write("Step 1: Retrieving unique work item IDs from Azure DevOps...")
             
-            # Get revisions
+            # Get unique work item IDs from all days in range
             revisions_data = azure_service.get_work_item_revisions(
                 selected_projects,
                 work_item_types,
@@ -86,14 +87,27 @@ if analyze_button and selected_states and selected_projects and work_item_types:
                 end_datetime
             )
             
-            st.write(f"✓ Found {len(revisions_data['revisions'])} revisions")
+            total_ids = revisions_data['total_unique_ids']
+            st.write(f"✓ Found {total_ids} unique work items")
             time.sleep(1)
             
-            st.write("Analyzing state changes...")
+            st.write("Step 2: Fetching historical updates for each work item...")
+            progress_bar = st.progress(0)
+            
+            # This will fetch updates with caching
+            work_item_ids = revisions_data['work_item_ids']
+            for idx, wi_id in enumerate(work_item_ids):
+                azure_service.get_work_item_updates(wi_id)
+                progress_bar.progress((idx + 1) / total_ids)
+            
+            st.write("✓ Updates retrieved and cached")
+            time.sleep(1)
+            
+            st.write("Step 3: Analyzing state changes within date range...")
             
             # Analyze state changes
             analysis_results = azure_service.analyze_state_changes(
-                revisions_data,
+                work_item_ids,
                 selected_states,
                 start_datetime,
                 end_datetime
@@ -106,7 +120,6 @@ if analyze_button and selected_states and selected_projects and work_item_types:
             status.update(
                 label="Analysis complete!", state="complete", expanded=False
             )
-            st.session_state.run_download = False
 
         # Prepare data for analysis
         all_items = []
@@ -119,9 +132,11 @@ if analyze_button and selected_states and selected_projects and work_item_types:
                     'ID': f"{AZURE_DEVOPS_URL}/{item['project']}/_workitems/edit/{item['id']}",
                     'Title': item['title'],
                     'State': state,
+                    'Old State': item.get('old_state', 'N/A'),
                     'Type': item.get('work_item_type', ''),
                     'Area Path': item.get('area_path', ''),
                     'Tags': item.get('tags', ''),
+                    'Changed By': item.get('changed_by', 'Unknown'),
                     'State Change Date': pd.to_datetime(item['date']).strftime('%m/%d/%Y %H:%M'),
                     'SCD UTC': pd.to_datetime(item['date']).strftime('%m/%d/%Y %H:%M')
                 })
@@ -165,6 +180,9 @@ if analyze_button and selected_states and selected_projects and work_item_types:
             }])
             cross_df = pd.concat([cross_df, total_row], ignore_index=True)
             
+            # Store in session state
+            st.session_state.cross_df = cross_df
+            
             st.dataframe(
                 cross_df,
                 hide_index=True,
@@ -183,7 +201,10 @@ if analyze_button and selected_states and selected_projects and work_item_types:
             st.subheader("Detailed Results")
             
             df = pd.DataFrame(all_items)
-            df = df[['ID', 'Title', 'Type', 'State', 'Area Path', 'Tags', 'State Change Date', 'SCD UTC']]
+            df = df[['ID', 'Title', 'Type', 'Old State', 'State', 'Area Path', 'Tags', 'Changed By', 'State Change Date', 'SCD UTC']]
+            
+            # Store in session state
+            st.session_state.analysis_df = df
             
             st.dataframe(
                 df,
@@ -225,10 +246,55 @@ if analyze_button and selected_states and selected_projects and work_item_types:
         import traceback
         st.error(traceback.format_exc())
 
-else:
-    if not selected_states:
-        st.warning("Please select at least one state to analyze.")
-    if not selected_projects:
-        st.warning("Please select at least one team project.")
-    if not work_item_types:
-        st.warning("Please select at least one work item type.")
+# Display cached results if available (when not running new analysis)
+elif st.session_state.analysis_df is not None and not analyze_button:
+    st.divider()
+    st.subheader("Last Analysis Results")
+    
+    if st.session_state.cross_df is not None:
+        st.subheader("State Count by Project")
+        st.dataframe(
+            st.session_state.cross_df,
+            hide_index=True,
+            column_config={
+                "Project": st.column_config.Column(
+                    "Project",
+                    width="medium",
+                    pinned="left"
+                )
+            }
+        )
+    
+    st.subheader("Detailed Results")
+    st.dataframe(
+        st.session_state.analysis_df,
+        hide_index=True,
+        column_config={
+            "ID": st.column_config.LinkColumn(
+                "ID",
+                width="small",
+                pinned="left",
+                help="Go to work item ADO",
+                display_text=r"(\d+)$"
+            ),
+            "State Change Date": st.column_config.DatetimeColumn(
+                "State Change Date (Local)",
+                timezone=str(get_localzone()),
+                format="MM/DD/YYYY HH:mm:ss",
+                width="medium"
+            ),
+            "SCD UTC": st.column_config.DatetimeColumn(
+                "State Change Date (UTC)",
+                format="MM/DD/YYYY HH:mm:ss",
+                width="medium"
+            ),
+            "Area Path": st.column_config.Column(
+                "Area Path",
+                width="medium"
+            ),
+            "Tags": st.column_config.Column(
+                "Tags",
+                width="medium"
+            )
+        }
+    )
